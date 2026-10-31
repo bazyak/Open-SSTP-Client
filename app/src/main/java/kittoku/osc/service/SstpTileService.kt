@@ -60,11 +60,11 @@ internal class SstpTileService : TileService() {
     }
 
     private fun initializeState() {
-        if (isVpnPrepared) {
-            updateTileState()
-        } else {
-            invalidateTileState()
-        }
+        updateTileState()
+        // if (isVpnPrepared) {
+        // } else {
+        //     invalidateTileState()
+        // }
     }
 
     override fun onTileAdded() {
