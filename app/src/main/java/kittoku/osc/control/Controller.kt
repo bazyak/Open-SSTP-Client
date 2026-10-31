@@ -90,6 +90,15 @@ internal class Controller(internal val bridge: SharedBridge) {
             }
 
 
+            // Register PPP negotiators before the previous stage completes: the server starts
+            // its own negotiation right away, and a frame for a mailbox that doesn't exist yet
+            // is silently dropped, so we would have to wait for the server to resend it
+            val lcp = LCPClient(bridge).also {
+                lcpClient = it
+                incomingManager!!.registerMailbox(it)
+            }
+
+
             SstpClient(bridge).also {
                 sstpClient = it
                 incomingManager!!.registerMailbox(it)
@@ -110,8 +119,7 @@ internal class Controller(internal val bridge: SharedBridge) {
             }
 
 
-            LCPClient(bridge).also {
-                incomingManager!!.registerMailbox(it)
+            lcp.also {
                 it.launchJobNegotiation()
 
                 if (!expectProceeded(Where.LCP, PPP_NEGOTIATION_TIMEOUT)) {
@@ -120,6 +128,21 @@ internal class Controller(internal val bridge: SharedBridge) {
 
                 incomingManager!!.unregisterMailbox(it)
             }
+
+
+            val ipcp = if (bridge.PPP_IPv4_ENABLED) {
+                IpcpClient(bridge).also {
+                    ipcpClient = it
+                    incomingManager!!.registerMailbox(it)
+                }
+            } else null
+
+            val ipv6cp = if (bridge.PPP_IPv6_ENABLED) {
+                Ipv6cpClient(bridge).also {
+                    ipv6cpClient = it
+                    incomingManager!!.registerMailbox(it)
+                }
+            } else null
 
 
             val authTimeout = getIntPrefValue(OscPrefKey.PPP_AUTH_TIMEOUT, bridge.prefs) * 1000L
@@ -162,31 +185,25 @@ internal class Controller(internal val bridge: SharedBridge) {
             sstpClient!!.sendCallConnected()
 
 
-            if (bridge.PPP_IPv4_ENABLED) {
-                IpcpClient(bridge).also {
-                    incomingManager!!.registerMailbox(it)
-                    it.launchJobNegotiation()
+            ipcp?.also {
+                it.launchJobNegotiation()
 
-                    if (!expectProceeded(Where.IPCP, PPP_NEGOTIATION_TIMEOUT)) {
-                        return@launch
-                    }
-
-                    incomingManager!!.unregisterMailbox(it)
+                if (!expectProceeded(Where.IPCP, PPP_NEGOTIATION_TIMEOUT)) {
+                    return@launch
                 }
+
+                incomingManager!!.unregisterMailbox(it)
             }
 
 
-            if (bridge.PPP_IPv6_ENABLED) {
-                Ipv6cpClient(bridge).also {
-                    incomingManager!!.registerMailbox(it)
-                    it.launchJobNegotiation()
+            ipv6cp?.also {
+                it.launchJobNegotiation()
 
-                    if (!expectProceeded(Where.IPV6CP, PPP_NEGOTIATION_TIMEOUT)) {
-                        return@launch
-                    }
-
-                    incomingManager!!.unregisterMailbox(it)
+                if (!expectProceeded(Where.IPV6CP, PPP_NEGOTIATION_TIMEOUT)) {
+                    return@launch
                 }
+
+                incomingManager!!.unregisterMailbox(it)
             }
 
 
@@ -224,6 +241,8 @@ internal class Controller(internal val bridge: SharedBridge) {
 
         if (received.result == Result.PROCEEDED) {
             assertAlways(received.from == where)
+
+            bridge.service.logWriter?.report("${where.name}: PROCEEDED")
 
             return true
         }

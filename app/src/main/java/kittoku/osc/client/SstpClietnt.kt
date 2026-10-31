@@ -123,8 +123,13 @@ internal class SstpClient(val bridge: SharedBridge) {
 
                 bridge.sslTerminal!!.send(request.toByteBuffer())
 
-                received = withTimeoutOrNull(SSTP_REQUEST_INTERVAL) { mailbox.receive() } ?: continue
+                val tried = withTimeoutOrNull(SSTP_REQUEST_INTERVAL) { mailbox.receive() }
+                if (tried == null) {
+                    bridge.service.logWriter?.report("SSTP_REQUEST: no reply in ${SSTP_REQUEST_INTERVAL / 1000} s, resending request")
+                    continue
+                }
 
+                received = tried
                 break
             }
 

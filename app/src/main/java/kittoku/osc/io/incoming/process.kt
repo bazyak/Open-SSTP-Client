@@ -135,7 +135,13 @@ internal suspend fun IncomingManager.processLcpFrame(code: Byte, buffer: ByteBuf
             return false
         }
 
-        lcpMailbox?.send(configureFrame)
+        val mailbox = lcpMailbox
+        if (mailbox != null) {
+            mailbox.send(configureFrame)
+        } else {
+            bridge.service.logWriter?.report("LCP: frame (code $code) dropped, no client to receive it")
+        }
+
         return true
     }
 
@@ -253,7 +259,13 @@ internal suspend fun IncomingManager.processIpcpFrame(code: Byte, buffer: ByteBu
         return false
     }
 
-    ipcpMailbox?.send(frame)
+    val mailbox = ipcpMailbox
+    if (mailbox != null) {
+        mailbox.send(frame)
+    } else {
+        bridge.service.logWriter?.report("IPCP: frame (code $code) dropped, no client to receive it")
+    }
+
     return true
 }
 

@@ -75,6 +75,8 @@ internal abstract class ConfigClient<T: Frame>(private val where: Where, protect
 
                 val received: T // accept only CONFIGURE_[REQUEST|ACK|NAK|REJECT]
                 if (tried == null) {
+                    bridge.service.logWriter?.report("${where.name}: no reply in ${PPP_REQUEST_INTERVAL / 1000} s, resending request")
+
                     isClientReady = false
 
                     sendClientRequest()

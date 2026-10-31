@@ -21,7 +21,10 @@ internal class LogWriter(logOutput: OutputStream) {
     }
 
     internal suspend fun report(message: String) {
-        mutex.withLock { write(message) }
+        mutex.withLock {
+            write(message)
+            outputStream.flush() // keep the file readable while the service is still running
+        }
     }
 
     internal fun close() {
