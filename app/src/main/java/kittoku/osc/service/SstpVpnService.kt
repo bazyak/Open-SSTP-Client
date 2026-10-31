@@ -38,6 +38,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -48,8 +49,11 @@ internal const val ACTION_VPN_DISCONNECT = "kittoku.osc.disconnect"
 
 internal const val NOTIFICATION_ERROR_CHANNEL = "ERROR"
 internal const val NOTIFICATION_RECONNECT_CHANNEL = "RECONNECT"
-internal const val NOTIFICATION_DISCONNECT_CHANNEL = "DISCONNECT"
+internal const val NOTIFICATION_DISCONNECT_CHANNEL = "STATUS"
+private const val LEGACY_NOTIFICATION_DISCONNECT_CHANNEL = "DISCONNECT"
 internal const val NOTIFICATION_CERTIFICATE_CHANNEL = "CERTIFICATE"
+
+private const val DISCONNECT_TIMEOUT = 2_000L
 
 internal const val NOTIFICATION_ERROR_ID = 1
 internal const val NOTIFICATION_RECONNECT_ID = 2
@@ -72,6 +76,10 @@ internal class SstpVpnService : VpnService() {
         setBooleanPrefValue(state, OscPrefKey.ROOT_STATE, prefs)
     }
 
+    private fun setConnectedState(state: Boolean) {
+        setBooleanPrefValue(state, OscPrefKey.ROOT_CONNECTED, prefs)
+    }
+
     private fun requestTileListening() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             TileService.requestListeningState(this,
@@ -92,6 +100,10 @@ internal class SstpVpnService : VpnService() {
                 setBooleanPrefValue(newState, OscPrefKey.HOME_CONNECTOR, prefs)
                 requestTileListening()
             }
+
+            if (key == OscPrefKey.ROOT_CONNECTED.name) {
+                requestTileListening()
+            }
         }
 
         prefs.registerOnSharedPreferenceChangeListener(listener)
@@ -103,6 +115,7 @@ internal class SstpVpnService : VpnService() {
         return when (intent?.action) {
             ACTION_VPN_CONNECT -> {
                 controller?.kill(false, null)
+                setConnectedState(false)
 
                 beForegrounded()
                 resetReconnectionLife(prefs)
@@ -120,11 +133,26 @@ internal class SstpVpnService : VpnService() {
             }
 
             else -> {
-                // ensure that reconnection has been completely canceled or done
-                runBlocking { jobReconnect?.cancelAndJoin() }
+                // the tile has already been switched off by the user, reflect it at once
+                setRootState(false)
 
-                controller?.disconnect()
+                // ensure that reconnection has been completely canceled or done
+                runBlocking {
+                    logWriter?.report("Disconnection requested")
+                    jobReconnect?.cancelAndJoin()
+                }
+
+                val jobDisconnect = controller?.disconnect()
                 controller = null
+
+                // Wait until the socket and the tunnel are actually closed. Otherwise onDestroy()
+                // cancels the scope midway, and the tunnel stays up until its descriptor is
+                // garbage-collected
+                runBlocking {
+                    jobDisconnect?.also {
+                        withTimeoutOrNull(DISCONNECT_TIMEOUT) { it.join() }
+                    }
+                }
 
                 close()
 
@@ -200,10 +228,18 @@ internal class SstpVpnService : VpnService() {
                 NOTIFICATION_DISCONNECT_CHANNEL,
                 NOTIFICATION_CERTIFICATE_CHANNEL,
             ).map {
-                NotificationChannel(it, it, NotificationManager.IMPORTANCE_DEFAULT)
+                val importance = if (it == NOTIFICATION_DISCONNECT_CHANNEL) {
+                    NotificationManager.IMPORTANCE_LOW // silent, like Termux and other VPN clients
+                } else {
+                    NotificationManager.IMPORTANCE_DEFAULT
+                }
+
+                NotificationChannel(it, it, importance)
             }.also {
                 notificationManager.createNotificationChannels(it)
             }
+
+            notificationManager.deleteNotificationChannel(LEGACY_NOTIFICATION_DISCONNECT_CHANNEL)
         }
 
         val pendingIntent = PendingIntent.getService(
@@ -214,7 +250,8 @@ internal class SstpVpnService : VpnService() {
         )
 
         val builder = NotificationCompat.Builder(this, NOTIFICATION_DISCONNECT_CHANNEL).also {
-            it.priority = NotificationCompat.PRIORITY_DEFAULT
+            it.priority = NotificationCompat.PRIORITY_LOW
+            it.setSilent(true)
             it.setOngoing(true)
             it.setAutoCancel(true)
             it.setSmallIcon(R.drawable.ic_baseline_vpn_lock_24)
@@ -268,6 +305,7 @@ internal class SstpVpnService : VpnService() {
 
         scope.cancel()
 
+        setConnectedState(false)
         setRootState(false)
         prefs.unregisterOnSharedPreferenceChangeListener(listener)
     }

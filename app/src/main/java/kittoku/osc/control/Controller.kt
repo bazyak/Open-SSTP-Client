@@ -26,6 +26,7 @@ import kittoku.osc.preference.OscPrefKey
 import kittoku.osc.preference.accessor.getBooleanPrefValue
 import kittoku.osc.preference.accessor.getIntPrefValue
 import kittoku.osc.preference.accessor.resetReconnectionLife
+import kittoku.osc.preference.accessor.setBooleanPrefValue
 import kittoku.osc.terminal.SSL_REQUEST_INTERVAL
 import kittoku.osc.unit.sstp.SSTP_MESSAGE_TYPE_CALL_ABORT
 import kittoku.osc.unit.sstp.SSTP_MESSAGE_TYPE_CALL_DISCONNECT
@@ -35,6 +36,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeoutOrNull
+
+
+private const val CLEANUP_TIMEOUT = 1_000L
 
 
 internal class Controller(internal val bridge: SharedBridge) {
@@ -221,6 +225,8 @@ internal class Controller(internal val bridge: SharedBridge) {
 
             observer = NetworkObserver(bridge)
 
+            setBooleanPrefValue(true, OscPrefKey.ROOT_CONNECTED, bridge.prefs)
+
             if (isReconnectionEnabled) {
                 resetReconnectionLife(bridge.prefs)
             }
@@ -269,24 +275,31 @@ internal class Controller(internal val bridge: SharedBridge) {
         return false
     }
 
-    internal fun disconnect() { // use if the user want to normally disconnect
-        kill(false) {
+    internal fun disconnect(): Job? { // use if the user want to normally disconnect
+        return kill(false) {
             sstpClient?.sendLastPacket(SSTP_MESSAGE_TYPE_CALL_DISCONNECT)
         }
     }
 
-    internal fun kill(isReconnectionRequested: Boolean, cleanup: (suspend () -> Unit)?) {
-        if (!mutex.tryLock()) return
+    /**
+     * Returns the teardown job, or null if a teardown is already in progress
+     */
+    internal fun kill(isReconnectionRequested: Boolean, cleanup: (suspend () -> Unit)?): Job? {
+        if (!mutex.tryLock()) return null
 
-        bridge.service.scope.launch {
+        return bridge.service.scope.launch {
+            setBooleanPrefValue(false, OscPrefKey.ROOT_CONNECTED, bridge.prefs)
+
             observer?.close()
 
             jobMain?.cancel()
             cancelClients()
 
-            cleanup?.invoke()
+            // the socket may be dead already, don't let a stuck write keep the tunnel up
+            withTimeoutOrNull(CLEANUP_TIMEOUT) { cleanup?.invoke() }
 
             closeTerminals()
+            bridge.service.logWriter?.report("Tunnel closed")
 
             if (isReconnectionRequested && isReconnectionAvailable) {
                 bridge.service.launchJobReconnect()

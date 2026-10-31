@@ -19,6 +19,7 @@ import kotlinx.serialization.json.Json
 
 private val EXCLUDED_BOOLEAN_PREFERENCES = arrayOf(
     OscPrefKey.ROOT_STATE,
+    OscPrefKey.ROOT_CONNECTED,
     OscPrefKey.HOME_CONNECTOR,
     OscPrefKey.HOME_STATUS,
 )
